@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "913108782913",
+    "project_id": "file-s-94db2",
+    "storage_bucket": "file-s-94db2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:913108782913:android:8f7e778a7ce5339b5d1bc0",
+        "android_client_info": {
+          "package_name": "com.example.cargotrackingapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDD47dSnPFy3vJmdpi92y7REIsxFC4Yr3E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
