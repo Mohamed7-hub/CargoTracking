@@ -30,16 +30,19 @@ import java.util.Map;
 
 public class LocationService extends Service {
 
+    // Constants
     private static final String TAG = "LocationService";
     private static final String CHANNEL_ID = "location_channel";
     private static final int NOTIFICATION_ID = 1;
 
+    // Action constants
     public static final String ACTION_START_TRACKING = "com.example.cargotracking.START_TRACKING";
     public static final String ACTION_STOP_TRACKING = "com.example.cargotracking.STOP_TRACKING";
     public static final String ACTION_LOCATION_UPDATE = "com.example.cargotracking.LOCATION_UPDATE";
     public static final String EXTRA_LATITUDE = "extra_latitude";
     public static final String EXTRA_LONGITUDE = "extra_longitude";
 
+    // Service components
     private FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
     private FirebaseFirestore db;
@@ -49,36 +52,35 @@ public class LocationService extends Service {
     public void onCreate() {
         super.onCreate();
 
-        // Initialize Firebase Firestore
+        // Initialize Firebase and location services
         db = FirebaseFirestore.getInstance();
-
-        // Initialize location client
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-        // Create location callback
+        // Set up location callback
+        setupLocationCallback();
+
+        // Create notification channel for foreground service
+        createNotificationChannel();
+    }
+
+    // Define how to handle location updates
+    private void setupLocationCallback() {
         locationCallback = new LocationCallback() {
             @Override
             public void onLocationResult(LocationResult locationResult) {
-                if (locationResult == null) {
-                    return;
-                }
-
-                for (Location location : locationResult.getLocations()) {
-                    // Process the location update
-                    processLocationUpdate(location);
+                if (locationResult != null) {
+                    for (Location location : locationResult.getLocations()) {
+                        processLocationUpdate(location);
+                    }
                 }
             }
         };
-
-        // Create notification channel for Android O and above
-        createNotificationChannel();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
             String action = intent.getAction();
-
             if (ACTION_START_TRACKING.equals(action) && !isTracking) {
                 startLocationTracking();
             } else if (ACTION_STOP_TRACKING.equals(action)) {
@@ -86,81 +88,65 @@ public class LocationService extends Service {
                 stopSelf();
             }
         }
-
-        return START_STICKY;
+        return START_STICKY; // Service will restart if killed
     }
 
+    // Start tracking location updates
     private void startLocationTracking() {
-        // Create location request
-        LocationRequest locationRequest = new LocationRequest.Builder(10000) // 10 seconds
+        LocationRequest locationRequest = new LocationRequest.Builder(10000) // Update every 10s
                 .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
-                .setMinUpdateIntervalMillis(5000) // 5 seconds
+                .setMinUpdateIntervalMillis(5000) // Minimum 5s between updates
                 .build();
 
         try {
-            // Start location updates
-            fusedLocationClient.requestLocationUpdates(
-                    locationRequest,
-                    locationCallback,
-                    Looper.getMainLooper()
-            );
-
+            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
             isTracking = true;
-
-            // Start foreground service with notification
             startForeground();
-
             Log.d(TAG, "Location tracking started");
         } catch (SecurityException e) {
             Log.e(TAG, "Error starting location tracking", e);
         }
     }
 
+    // Stop tracking location updates
     private void stopLocationTracking() {
-        // Stop location updates
         fusedLocationClient.removeLocationUpdates(locationCallback);
         isTracking = false;
-
-        // Stop foreground service
         stopForeground(true);
-
         Log.d(TAG, "Location tracking stopped");
     }
 
+    // Process a new location update
     private void processLocationUpdate(Location location) {
-        // Check if the location is valid (not 0,0 which is in the ocean)
-        if (location.getLatitude() == 0 && location.getLongitude() == 0) {
-            Log.d(TAG, "Ignoring invalid location at 0,0");
-            return;
-        }
-
-        // Check if the location has reasonable accuracy
-        if (location.hasAccuracy() && location.getAccuracy() > 100) {  // More than 100 meters
-            Log.d(TAG, "Ignoring inaccurate location: " + location.getAccuracy() + "m");
-            return;
-        }
+        // Filter out invalid or inaccurate locations
+        if (!isValidLocation(location)) return;
 
         double latitude = location.getLatitude();
         double longitude = location.getLongitude();
 
-        // Update foreground notification
+        // Update UI and storage
         updateNotification(latitude, longitude);
-
-        // Send a separate location update notification
         sendLocationUpdateNotification(latitude, longitude);
-
-        // Send broadcast to update UI
-        Intent intent = new Intent(ACTION_LOCATION_UPDATE);
-        intent.putExtra(EXTRA_LATITUDE, latitude);
-        intent.putExtra(EXTRA_LONGITUDE, longitude);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
-
-        // Save to Firestore
+        broadcastLocationUpdate(latitude, longitude);
         saveLocationToFirestore(latitude, longitude);
 
         Log.d(TAG, "Location update: " + latitude + ", " + longitude);
     }
 
+    // Validate location data
+    private boolean isValidLocation(Location location) {
+        if (location.getLatitude() == 0 && location.getLongitude() == 0) {
+            Log.d(TAG, "Ignoring invalid location at 0,0");
+            return false;
+        }
+        if (location.hasAccuracy() && location.getAccuracy() > 100) {
+            Log.d(TAG, "Ignoring inaccurate location: " + location.getAccuracy() + "m");
+            return false;
+        }
+        return true;
+    }
+
+    // Save location to Firestore
     private void saveLocationToFirestore(double latitude, double longitude) {
         Map<String, Object> locationData = new HashMap<>();
         locationData.put("latitude", latitude);
@@ -169,32 +155,27 @@ public class LocationService extends Service {
 
         db.collection("locations")
                 .add(locationData)
-                .addOnSuccessListener(documentReference ->
-                        Log.d(TAG, "Location saved to Firestore: " + documentReference.getId()))
-                .addOnFailureListener(e ->
-                        Log.e(TAG, "Error saving location to Firestore", e));
+                .addOnSuccessListener(doc -> Log.d(TAG, "Location saved: " + doc.getId()))
+                .addOnFailureListener(e -> Log.e(TAG, "Error saving location", e));
     }
 
+    // Create notification channel for Android O+
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID,
                     "Location Tracking Channel",
-                    NotificationManager.IMPORTANCE_HIGH);  // Change from IMPORTANCE_LOW to IMPORTANCE_HIGH
+                    NotificationManager.IMPORTANCE_HIGH);
             channel.setDescription("Used for location tracking notifications");
             channel.enableLights(true);
             channel.enableVibration(true);
 
-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
-            notificationManager.createNotificationChannel(channel);
+            getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
     }
 
+    // Start service in foreground mode
     private void startForeground() {
-        // Create notification for foreground service
         Notification notification = createNotification("Tracking location...");
-
-        // Start foreground service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
         } else {
@@ -202,59 +183,53 @@ public class LocationService extends Service {
         }
     }
 
+    // Update ongoing notification with current location
     private void updateNotification(double latitude, double longitude) {
-        String notificationText = String.format("Location: %.6f, %.6f", latitude, longitude);
-        Notification notification = createNotification(notificationText);
-
-        NotificationManager notificationManager = getSystemService(NotificationManager.class);
-        notificationManager.notify(NOTIFICATION_ID, notification);
+        String text = String.format("Location: %.6f, %.6f", latitude, longitude);
+        Notification notification = createNotification(text);
+        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification);
     }
 
+    // Create a notification with given text
     private Notification createNotification(String text) {
-        // Create intent for notification click
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                notificationIntent,
-                PendingIntent.FLAG_IMMUTABLE
-        );
+        Intent intent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
 
-        // Build notification
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Cargo Tracking")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_location)
                 .setContentIntent(pendingIntent)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)  // Change from PRIORITY_LOW to PRIORITY_HIGH
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setOngoing(true)
                 .build();
     }
 
+    // Send a separate notification for each location update
     private void sendLocationUpdateNotification(double latitude, double longitude) {
-        String notificationText = String.format("New location update: %.6f, %.6f", latitude, longitude);
+        String text = String.format("New location update: %.6f, %.6f", latitude, longitude);
+        Intent intent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
 
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                notificationIntent,
-                PendingIntent.FLAG_IMMUTABLE
-        );
-
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Location Update")
-                .setContentText(notificationText)
+                .setContentText(text)
                 .setSmallIcon(R.drawable.ic_location)
                 .setContentIntent(pendingIntent)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true);
+                .setAutoCancel(true)
+                .build();
 
-        NotificationManager notificationManager = getSystemService(NotificationManager.class);
-        // Use a different notification ID for each update
-        int notificationId = (int) System.currentTimeMillis();
-        notificationManager.notify(notificationId, builder.build());
+        getSystemService(NotificationManager.class).notify((int) System.currentTimeMillis(), notification);
+    }
+
+    // Broadcast location update to MainActivity
+    private void broadcastLocationUpdate(double latitude, double longitude) {
+        Intent intent = new Intent(ACTION_LOCATION_UPDATE);
+        intent.putExtra(EXTRA_LATITUDE, latitude);
+        intent.putExtra(EXTRA_LONGITUDE, longitude);
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
 
     @Nullable
@@ -265,10 +240,7 @@ public class LocationService extends Service {
 
     @Override
     public void onDestroy() {
-        if (isTracking) {
-            stopLocationTracking();
-        }
+        if (isTracking) stopLocationTracking();
         super.onDestroy();
     }
 }
-

@@ -60,12 +60,7 @@ public class WorkManagerHelper {
         public Result doWork() {
             Log.d(TAG, "Performing background sync of location data");
 
-            // Here you would typically:
-            // 1. Check if there's any unsynchronized location data
-            // 2. Sync with the server if needed
-            // 3. Perform any cleanup or optimization tasks
 
-            // For this example, we'll just log that the work was done
             return Result.success();
         }
     }
